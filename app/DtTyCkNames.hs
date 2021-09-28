@@ -1,6 +1,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Strict #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE TupleSections #-}
 
 module DtTyCkNames where
 
@@ -15,6 +17,7 @@ import Text.Megaparsec
 import qualified Text.Megaparsec.Char as C
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Printf
+import Text.Megaparsec.Error (errorBundlePretty)
 
 type Name = String
 
@@ -94,20 +97,20 @@ eval env = \case
   U -> VU
   SrcPos _ t -> eval env t
 
-qoute :: Env -> Val -> Term
-qoute env = \case
+quote :: Env -> Val -> Term
+quote env = \case
   VVar x -> Var x
-  VApp t u -> App (qoute env t) (qoute env u)
+  VApp t u -> App (quote env t) (quote env u)
   VLam x t ->
     let x' = fresh env x
-      in Lam x' (qoute ((x', VVar x') : env) (t (VVar x)))
+      in Lam x' (quote ((x', VVar x') : env) (t (VVar x)))
   VPi x a b ->
     let x' = fresh env x
-      in Pi x' (qoute env a) (qoute ((x, VVar x) : env) (b (VVar x)))
+      in Pi x' (quote env a) (quote ((x, VVar x) : env) (b (VVar x)))
   VU -> U
 
 normalform :: Env -> Term -> Term
-normalform env = qoute env . eval env
+normalform env = quote env . eval env
 
 normalform0 :: Term -> Term
 normalform0 = normalform []
@@ -119,18 +122,18 @@ conv env t u = case (t, u) of
   (VPi x a b, VPi x' a' b') ->
     let y = fresh env x
         y' = fresh env x'
-     in conv env a a' && conv ((y, VVar y) : env) (b (VVar y)) (b' (VVar y'))
+      in conv env a a' && conv ((y, VVar y) : env) (b (VVar y)) (b' (VVar y'))
   (VLam x t, VLam x' t') ->
     let y = fresh env x
         y' = fresh env x'
-     in conv ((y, VVar y) : env) (t (VVar y)) (t' (VVar y'))
+      in conv ((y, VVar y) : env) (t (VVar y)) (t' (VVar y'))
   -- eta conversion for Lam
   (VLam x t, u) ->
     let y = fresh env x
-     in conv ((y, VVar y) : env) (t (VVar y)) (VApp u (VVar y))
+      in conv ((y, VVar y) : env) (t (VVar y)) (VApp u (VVar y))
   (u, VLam x t) ->
     let y = fresh env x
-     in conv ((y, VVar y) : env) (VApp u (VVar y)) (t (VVar y))
+      in conv ((y, VVar y) : env) (VApp u (VVar y)) (t (VVar y))
   (VVar x, VVar x') -> x == x'
   (VApp t u, VApp t' u') -> conv env t t' && conv env u u'
   _ -> False
@@ -148,7 +151,7 @@ report :: String -> M a
 report str = Left (str, Nothing)
 
 qouteShow :: Env -> Val -> String
-qouteShow env = show . qoute env
+qouteShow env = show . quote env
 
 addPos :: SourcePos -> M a -> M a
 addPos pos ma = case ma of
@@ -161,7 +164,7 @@ check env ctxt t a = case (t, a) of
   (SrcPos pos t, _) -> addPos pos (check env ctxt t a)
   (Lam x t, VPi x' a b) ->
     let y = fresh env x'
-     in check ((x, VVar y) : env) ((x, a) : ctxt) t (b (VVar y))
+      in check ((x, VVar y) : env) ((x, a) : ctxt) t (b (VVar y))
   (Let x a' t' u, _) -> do
     check env ctxt a' VU -- is a' : U ?
     let ~a'' = eval env a' -- VTy
@@ -268,14 +271,13 @@ parens p = char '(' *> p <* char ')'
 pArrow  = symbol "->"
 
 keyword :: String -> Bool
-keyword x = x == "let" || x == "in" || x == "λ" || x == "U"
+keyword x = x == "let" || x == "in" || x == "\\" || x == "U"
 
 pIdent :: Parser Name
 pIdent = try $ do
   x <- takeWhile1P Nothing isAlphaNum
   guard (not (keyword x))
   x <$ ws
-
 
 pAtom =
         withPos ((Var <$> pIdent) <|> (U <$ symbol "U"))
@@ -289,7 +291,7 @@ pTerm = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)
 
 
 pLam = do
-  char '\\' <|> char 'λ'
+  char '\\'
   xs <- some pBinder
   char '.'
   t <- pTerm
@@ -322,6 +324,71 @@ pKeyword kw = do
   C.string kw
   (takeWhile1P Nothing isAlphaNum *> empty) <|> ws
 
+pSrc = ws *> pTerm <* eof
+
+parseString :: String -> IO Term
+parseString src = case parse pSrc "(stdin)" src of
+  Left e -> do
+      putStrLn $ errorBundlePretty e
+      exitSuccess
+  Right t -> pure t
+
+
+parseStdin :: IO (Term, String)
+parseStdin = do
+  file <- getContents
+  t <- parseString file
+  pure (t, file)
+
+-- main
+---------
+
+displayError :: String -> (String, Maybe SourcePos) -> IO ()
+displayError file (msg, Just (SourcePos path (unPos -> linum) (unPos -> colnum))) = do
+  let lnum = show linum
+      lpad = map (const ' ') lnum
+  printf "%s:%d:%d:\n" path linum colnum
+  printf "%s |\n" lpad
+  printf "%s | %s\n" lnum (lines file !! (linum - 1))
+  printf "%s | %s\n" lpad (replicate (colnum - 1) ' ' ++ "^")
+  printf "%s\n" msg
+displayError _ _ = error "displayError: impossible: no available source position"
+
+helpMsg =
+  unlines
+    [ "usage: Dt-Elab [--help|nf|type]",
+      "  --help : display this message",
+      "  nf     : read & typecheck expression from stdin, print its normal form and type",
+      "  type   : read & typecheck expression from stdin, print its type"
+    ]
+
+mainWith :: IO [String] -> IO (Term, String) -> IO ()
+mainWith getOpt getTerm = do
+  getOpt >>= \case
+    ["--help"] -> putStrLn helpMsg
+    ["nf"] -> do
+      (t, file) <- getTerm
+      putStrLn "Term : "
+      print t
+      case infer [] [] t of
+        Left err -> displayError file err
+        Right a -> do
+          print $ normalform0 t
+          putStrLn "  :"
+          print $ quote [] a
+    ["type"] -> do
+      (t, file) <- getTerm
+      putStrLn "Term : "
+      print t
+      either (displayError file) (print . quote []) $ infer [] [] t
+    _ -> putStrLn helpMsg
+
+main :: IO ()
+main = mainWith getArgs parseStdin
+
+-- | Run main with inputs as function arguments.
+main' :: String -> String -> IO ()
+main' mode src = mainWith (pure [mode]) ((,src) <$> parseString src)
 
 
 

@@ -1,9 +1,7 @@
 module Main where
 
-import DbiClosure
-
-
-t0 = (App (Lam (Var 0)) (Lam (Var 0)))
-
-main = print (normalform  Nil t0) 
-
+import System.Environment
+import ApplicativeParser
+import DtTyCkDbi hiding (main)
+import Main.Utf8 (withUtf8)
+main = withUtf8 $ mainWith getArgs parseStdin

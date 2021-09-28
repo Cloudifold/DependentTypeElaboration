@@ -1,5 +1,3 @@
- {-# language LambdaCase, DerivingVia, Strict #-}
-
 module DbiClosure where
 
 import Prelude hiding (length, lookup)

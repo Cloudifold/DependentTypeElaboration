@@ -61,7 +61,7 @@ quote names = \case
     VVar x         -> Var x
     VApp t u ->  App (quote names t) (quote names u)
     VLam x f  -> let x' = fresh names x in 
-       Lam x' (quote (x':names) (f (VVar x')))
+        Lam x' (quote (x':names) (f (VVar x')))
 
 normalform :: Ctxt -> Term -> Term
 normalform ctxt = quote (map fst ctxt) . eval ctxt
