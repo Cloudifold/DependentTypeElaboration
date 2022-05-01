@@ -324,8 +324,7 @@ pLet = do
   symbol "="
   t <- pRaw
   pKeyword "in"
-  u <- pRaw
-  pure $ RLet x a t u
+  RLet x a t <$> pRaw
 
 pRaw = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)
 
