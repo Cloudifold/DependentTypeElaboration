@@ -1,4 +1,4 @@
 *.agdai
 *.agda~
 *.txt~
-dist-newstyle/
+dist-newstyle
