@@ -1,4 +1,6 @@
 *.agdai
 *.agda~
 *.txt~
-dist-newstyle
+dist-newstyle/
+.stack-work/
+.vscode/
